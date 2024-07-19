@@ -13,6 +13,7 @@
 # limitations under the License.
 from __future__ import annotations
 
+import glob
 import os
 import warnings
 from typing import Optional
@@ -438,11 +439,15 @@ def load_peft_weights(model_id: str, device: Optional[str] = None, **hf_hub_down
     if device is None:
         device = infer_device()
 
-    if os.path.exists(os.path.join(path, SAFETENSORS_WEIGHTS_NAME)):
-        filename = os.path.join(path, SAFETENSORS_WEIGHTS_NAME)
+    safetensors_weights_name_base = os.path.splitext(SAFETENSORS_WEIGHTS_NAME)[0]
+    adapter_model_safetensors = sorted(glob.glob(os.path.join(path, f"{safetensors_weights_name_base}*.safetensors")))
+    weights_name_base = os.path.splitext(WEIGHTS_NAME)[0]
+    adapter_model_bins = sorted(glob.glob(os.path.join(path, f"{weights_name_base}*.bin")))
+    if len(adapter_model_safetensors) > 0:
+        filenames = adapter_model_safetensors
         use_safetensors = True
-    elif os.path.exists(os.path.join(path, WEIGHTS_NAME)):
-        filename = os.path.join(path, WEIGHTS_NAME)
+    elif len(adapter_model_bins) > 0:
+        filenames = adapter_model_bins
         use_safetensors = False
     else:
         token = hf_hub_download_kwargs.get("token", None)
@@ -465,14 +470,14 @@ def load_peft_weights(model_id: str, device: Optional[str] = None, **hf_hub_down
 
         if has_remote_safetensors_file:
             # Priority 1: load safetensors weights
-            filename = hf_hub_download(
+            filenames = [hf_hub_download(
                 model_id,
                 SAFETENSORS_WEIGHTS_NAME,
                 **hf_hub_download_kwargs,
-            )
+            )]
         else:
             try:
-                filename = hf_hub_download(model_id, WEIGHTS_NAME, **hf_hub_download_kwargs)
+                filenames = [hf_hub_download(model_id, WEIGHTS_NAME, **hf_hub_download_kwargs)]
             except EntryNotFoundError:
                 raise ValueError(
                     f"Can't find weights for {model_id} in {model_id} or in the Hugging Face Hub. "
@@ -480,11 +485,16 @@ def load_peft_weights(model_id: str, device: Optional[str] = None, **hf_hub_down
                 )
 
     if use_safetensors:
+        adapters_weights = {}
         if hasattr(torch.backends, "mps") and (device == torch.device("mps")):
-            adapters_weights = safe_load_file(filename, device="cpu")
+            for filename in filenames:
+                adapters_weights.update(safe_load_file(filename, device="cpu"))
         else:
-            adapters_weights = safe_load_file(filename, device=device)
+            for filename in filenames:
+                adapters_weights.update(safe_load_file(filename, device=device))
     else:
-        adapters_weights = torch.load(filename, map_location=torch.device(device))
+        adapters_weights = {}
+        for filename in filenames:
+            adapters_weights.update(torch.load(filename, map_location=torch.device(device)))
 
     return adapters_weights
